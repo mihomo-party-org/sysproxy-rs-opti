@@ -1,6 +1,5 @@
 use crate::{Autoproxy, Error, Result, Sysproxy};
 use log::debug;
-use std::net::{SocketAddr, UdpSocket};
 use std::{process::Command, str::from_utf8};
 
 impl Sysproxy {
@@ -271,24 +270,74 @@ fn strip_str<'a>(text: &'a str) -> &'a str {
 }
 
 fn default_network_service() -> Result<String> {
-    let socket = UdpSocket::bind("0.0.0.0:0")?;
-    socket.connect("1.1.1.1:80")?;
-    let ip = socket.local_addr()?.ip();
-    let addr = SocketAddr::new(ip, 0);
-
-    let interfaces = interfaces::Interface::get_all().or(Err(Error::NetworkInterface))?;
-    let interface = interfaces
-        .into_iter()
-        .find(|i| i.addresses.iter().find(|a| a.addr == Some(addr)).is_some())
-        .map(|i| i.name.to_owned());
-
-    match interface {
-        Some(interface) => {
-            let service = get_server_by_order(interface)?;
-            Ok(service)
-        }
-        None => Err(Error::NetworkInterface),
+    // 默认路由获取活跃接口
+    if let Ok(service) = get_service_by_default_route() {
+        debug!("Found service by default route: {}", service);
+        return Ok(service);
     }
+
+    // 检查常见的活跃网络服务
+    if let Ok(service) = get_service_by_active_connection() {
+        debug!("Found service by active connection: {}", service);
+        return Ok(service);
+    }
+
+    debug!("All methods failed, falling back to default_network_service_by_ns");
+    Err(Error::NetworkInterface)
+}
+
+fn get_service_by_default_route() -> Result<String> {
+    let output = Command::new("route")
+        .args(["get", "default"])
+        .output()?;
+
+    let stdout = from_utf8(&output.stdout).or(Err(Error::ParseStr("route output".into())))?;
+    let mut interface_name = None;
+
+    for line in stdout.lines() {
+        if line.trim().starts_with("interface:") {
+            interface_name = Some(line.split(':').nth(1).unwrap().trim().to_string());
+            break;
+        }
+    }
+
+    if let Some(interface) = interface_name {
+        debug!("Default route interface: {}", interface);
+        return get_server_by_order(interface);
+    }
+
+    Err(Error::NetworkInterface)
+}
+
+
+
+fn get_service_by_active_connection() -> Result<String> {
+    let services = ["Wi-Fi", "Ethernet", "USB 10/100/1000 LAN"];
+
+    for service in services {
+        // 检查服务是否存在且有活跃连接
+        let output = Command::new("networksetup")
+            .args(["-getinfo", service])
+            .output();
+
+        if let Ok(output) = output {
+            let stdout = from_utf8(&output.stdout).or(Err(Error::ParseStr("getinfo output".into())))?;
+            if !stdout.contains("** Error:") {
+                // 检查是否有有效的IP地址
+                for line in stdout.lines() {
+                    if line.starts_with("IP address:") {
+                        let ip = line.split(':').nth(1).unwrap().trim();
+                        if !ip.is_empty() && ip != "none" {
+                            debug!("Found active service with IP: {} - {}", service, ip);
+                            return Ok(service.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Err(Error::NetworkInterface)
 }
 
 fn default_network_service_by_ns() -> Result<String> {
