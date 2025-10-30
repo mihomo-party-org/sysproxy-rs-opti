@@ -12,16 +12,16 @@ pub mod utils;
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Sysproxy {
-    pub enable: bool,
     pub host: String,
-    pub port: u16,
     pub bypass: String,
+    pub port: u16,
+    pub enable: bool,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Autoproxy {
-    pub enable: bool,
     pub url: String,
+    pub enable: bool,
 }
 
 #[derive(thiserror::Error, Debug)]

@@ -1,5 +1,6 @@
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
     use serial_test::serial;
     use sysproxy::{Autoproxy, Sysproxy};
 

@@ -9,13 +9,13 @@ use iptools::iprange::{IPv4, IpRange, IpVer};
 /// assert_eq!(ipv4_cidr_to_wildcard("127.0.0.1/8").unwrap(), vec!["127.*".to_string()]);
 /// ```
 pub fn ipv4_cidr_to_wildcard(cidr: &str) -> Result<Vec<String>> {
-    let ip = IpRange::<IPv4>::new(cidr, "").or(Err(Error::ParseStr(cidr.into())))?;
+    let ip = IpRange::<IPv4>::new(cidr, "").map_err(|_| Error::ParseStr(cidr.into()))?;
 
     if ip.get_version() != IpVer::V4 {
         return Err(Error::ParseStr(cidr.into()));
     }
 
-    let (start, end) = ip.get_range().unwrap();
+    let (start, end) = ip.get_range().ok_or_else(|| Error::ParseStr(cidr.into()))?;
     let start = start.split('.').collect::<Vec<&str>>();
     let end = end.split('.').collect::<Vec<&str>>();
 
@@ -38,10 +38,10 @@ pub fn ipv4_cidr_to_wildcard(cidr: &str) -> Result<Vec<String>> {
 
         let s = start[i]
             .parse::<u16>()
-            .or(Err(Error::ParseStr(cidr.into())))?;
+            .map_err(|_| Error::ParseStr(cidr.into()))?;
         let e = end[i]
             .parse::<u16>()
-            .or(Err(Error::ParseStr(cidr.into())))?;
+            .map_err(|_| Error::ParseStr(cidr.into()))?;
 
         for j in s..e + 1 {
             let mut builder = each.clone();

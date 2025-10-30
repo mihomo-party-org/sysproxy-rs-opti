@@ -1,17 +1,16 @@
 use crate::{Autoproxy, Error, Result, Sysproxy};
 use std::ffi::c_void;
-use std::{mem::size_of, mem::ManuallyDrop, net::SocketAddr, str::FromStr};
+use std::{mem::ManuallyDrop, mem::size_of, net::SocketAddr, str::FromStr};
 use url::Url;
-use windows::core::PWSTR;
 use windows::Win32::Networking::WinInet::{
-    InternetSetOptionW, INTERNET_OPTION_PER_CONNECTION_OPTION,
-    INTERNET_OPTION_PROXY_SETTINGS_CHANGED, INTERNET_OPTION_REFRESH,
-    INTERNET_PER_CONN_AUTOCONFIG_URL, INTERNET_PER_CONN_FLAGS, INTERNET_PER_CONN_OPTIONW,
-    INTERNET_PER_CONN_OPTIONW_0, INTERNET_PER_CONN_OPTION_LISTW, INTERNET_PER_CONN_PROXY_BYPASS,
-    INTERNET_PER_CONN_PROXY_SERVER, PROXY_TYPE_AUTO_DETECT, PROXY_TYPE_AUTO_PROXY_URL,
-    PROXY_TYPE_DIRECT, PROXY_TYPE_PROXY,
+    INTERNET_OPTION_PER_CONNECTION_OPTION, INTERNET_OPTION_PROXY_SETTINGS_CHANGED,
+    INTERNET_OPTION_REFRESH, INTERNET_PER_CONN_AUTOCONFIG_URL, INTERNET_PER_CONN_FLAGS,
+    INTERNET_PER_CONN_OPTION_LISTW, INTERNET_PER_CONN_OPTIONW, INTERNET_PER_CONN_OPTIONW_0,
+    INTERNET_PER_CONN_PROXY_BYPASS, INTERNET_PER_CONN_PROXY_SERVER, InternetSetOptionW,
+    PROXY_TYPE_AUTO_DETECT, PROXY_TYPE_AUTO_PROXY_URL, PROXY_TYPE_DIRECT, PROXY_TYPE_PROXY,
 };
-use winreg::{enums, RegKey};
+use windows::core::PWSTR;
+use winreg::{RegKey, enums};
 
 pub use windows::core::Error as Win32Error;
 
@@ -154,17 +153,18 @@ impl Sysproxy {
         // 预设默认值
         let mut host = String::new();
         let mut port = 0u16;
-        
+
         if !proxy_server.is_empty() {
             if proxy_server.contains('=') {
                 // 处理多协议格式: http=127.0.0.1:7890;https=127.0.0.1:7890
                 let proxy_parts: Vec<&str> = proxy_server.split(';').collect();
-                
+
                 // 优先查找http代理
-                let http_proxy = proxy_parts.iter()
+                let http_proxy = proxy_parts
+                    .iter()
                     .find(|part| part.trim().to_lowercase().starts_with("http="))
                     .or_else(|| proxy_parts.first());
-                
+
                 if let Some(proxy) = http_proxy {
                     let proxy_value = proxy.split('=').nth(1).unwrap_or("");
                     parse_proxy_address(proxy_value, &mut host, &mut port);
@@ -220,7 +220,7 @@ fn parse_proxy_address(address: &str, host: &mut String, port: &mut u16) {
         *port = url.port().unwrap_or(80);
         return;
     }
-    
+
     // 尝试作为host:port解析
     if let Some((h, p)) = address.rsplit_once(':') {
         if let Ok(port_num) = p.parse::<u16>() {
@@ -229,7 +229,7 @@ fn parse_proxy_address(address: &str, host: &mut String, port: &mut u16) {
             return;
         }
     }
-    
+
     // 如果无法解析端口，默认使用主机名和标准HTTP端口
     *host = address.to_string();
     *port = 80;
