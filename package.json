@@ -1,0 +1,39 @@
+{
+  "name": "sysproxy-rs",
+  "version": "0.4.3",
+  "description": "System proxy library for Node.js",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "napi": {
+    "name": "sysproxy",
+    "triples": {
+      "defaults": false,
+      "additional": [
+        "x86_64-pc-windows-msvc",
+        "aarch64-pc-windows-msvc",
+        "x86_64-apple-darwin",
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-gnu",
+        "x86_64-unknown-linux-musl",
+        "aarch64-unknown-linux-musl"
+      ]
+    }
+  },
+  "scripts": {
+    "artifacts": "napi artifacts",
+    "build": "napi build --platform --release --features napi",
+    "build:debug": "napi build --platform --features napi",
+    "prepublishOnly": "napi prepublish -t npm",
+    "universal": "napi universal -t sysproxy-rs-darwin-x64 -t sysproxy-rs-darwin-arm64",
+    "version": "napi version"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^2.18.4"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/clash-verge-rev/sysproxy-rs.git"
+  }
+}
