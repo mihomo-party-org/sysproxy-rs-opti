@@ -20,8 +20,7 @@ impl Sysproxy {
                 return Err(e);
             }
         };
-        let service_owned = service;
-        let service = service_owned.as_str();
+        let service = &service;
 
         let mut socks = Sysproxy::get_socks(service)?;
         debug!("Getting SOCKS proxy: {:?}", socks);
@@ -236,6 +235,30 @@ impl ProxyType {
             Self::Socks => "socksfirewallproxy",
         }
     }
+    #[inline]
+    const fn as_set_str(&self) -> &'static str {
+        match self {
+            Self::Http => "-setwebproxy",
+            Self::Https => "-setsecurewebproxy",
+            Self::Socks => "-setsocksfirewallproxy",
+        }
+    }
+    #[inline]
+    const fn as_state_cmd(&self) -> &'static str {
+        match self {
+            Self::Http => "-setwebproxystate",
+            Self::Https => "-setsecurewebproxystate",
+            Self::Socks => "-setsocksfirewallproxystate",
+        }
+    }
+    #[inline]
+    const fn as_get_str(&self) -> &'static str {
+        match self {
+            Self::Http => "-getwebproxy",
+            Self::Https => "-getsecurewebproxy",
+            Self::Socks => "-getsocksfirewallproxy",
+        }
+    }
 }
 
 impl std::fmt::Display for ProxyType {
@@ -257,15 +280,13 @@ fn run_networksetup<'a>(args: &[&str]) -> Result<Cow<'a, str>> {
 
     let stdout = from_utf8(&output.stdout).map_err(|_| Error::ParseStr("output".into()))?;
 
-    if !status.success() {
-        if stdout.contains("requires admin privileges") {
-            log::error!(
-                "Admin privileges required to run networksetup with args: {:?}, error: {}",
-                args,
-                stdout
-            );
-            return Err(Error::RequiresAdminPrivileges);
-        }
+    if !status.success() && stdout.contains("requires admin privileges") {
+        log::error!(
+            "Admin privileges required to run networksetup with args: {:?}, error: {}",
+            args,
+            stdout
+        );
+        return Err(Error::RequiresAdminPrivileges);
     }
 
     Ok(Cow::Owned(stdout.to_string()))
@@ -273,19 +294,15 @@ fn run_networksetup<'a>(args: &[&str]) -> Result<Cow<'a, str>> {
 
 #[inline]
 fn set_proxy(proxy: &Sysproxy, proxy_type: ProxyType, service: &str) -> Result<()> {
-    let target = format!("-set{}", proxy_type);
-    let target = target.as_str();
-
     let host = proxy.host.as_str();
     let port = format!("{}", proxy.port);
     let port = port.as_str();
 
-    run_networksetup(&[target, service, host, port])?;
+    run_networksetup(&[proxy_type.as_set_str(), service, host, port])?;
 
-    let target_state = format!("-set{}state", proxy_type);
     let enable = if proxy.enable { "on" } else { "off" };
 
-    run_networksetup(&[target_state.as_str(), service, enable])?;
+    run_networksetup(&[proxy_type.as_state_cmd(), service, enable])?;
 
     Ok(())
 }
@@ -299,10 +316,7 @@ fn set_bypass(proxy: &Sysproxy, service: &str) -> Result<()> {
 
 #[inline]
 fn get_proxy(proxy_type: ProxyType, service: &str) -> Result<Sysproxy> {
-    let target = format!("-get{}", proxy_type);
-    let target = target.as_str();
-
-    let output = run_networksetup(&[target, service])?;
+    let output = run_networksetup(&[proxy_type.as_get_str(), service])?;
 
     let enable = parse(&output, "Enabled:");
     let enable = enable == "Yes";
@@ -322,19 +336,14 @@ fn get_proxy(proxy_type: ProxyType, service: &str) -> Result<Sysproxy> {
 }
 
 #[inline]
-fn parse<'a>(target: &'a str, key: &'a str) -> &'a str {
-    match target.find(key) {
-        Some(idx) => {
-            let idx = idx + key.len();
-            let value = &target[idx..];
-            let value = match value.find("\n") {
-                Some(end) => &value[..end],
-                None => value,
-            };
-            value.trim()
-        }
-        None => "",
-    }
+fn parse<'a>(target: &'a str, key: &str) -> &'a str {
+    target
+        .find(key)
+        .map(|idx| {
+            let val = &target[idx + key.len()..];
+            val.split('\n').next().unwrap_or(val).trim()
+        })
+        .unwrap_or("")
 }
 
 #[inline]
@@ -467,7 +476,7 @@ fn listnetworkserviceorder() -> Result<Vec<(String, String, String)>> {
     let mut lines = stdout.split('\n');
     lines.next(); // ignore the tips
 
-    let mut services = Vec::new();
+    let mut services = Vec::with_capacity(4);
     let mut p: Option<(String, String, String)> = None;
 
     for line in lines {
@@ -480,20 +489,21 @@ fn listnetworkserviceorder() -> Result<Vec<(String, String, String)>> {
                 let service = line[ri + 1..].trim();
                 p = Some((service.into(), "".into(), "".into()));
             }
-        } else {
-            let line_inner = &line[1..line.len() - 1];
-            if let (Some(pi), Some(di)) = (line_inner.find("Port:"), line_inner.find(", Device:")) {
-                let port = line_inner[pi + 5..di].trim();
-                let device = line_inner[di + 9..].trim();
-                if let Some(p_val) = p.take() {
-                    let (service, _, _) = p_val;
-                    let new_p = (service, port.into(), device.into());
-                    services.push(new_p);
-                }
-            }
+            continue;
+        }
+
+        let line_inner = &line[1..line.len() - 1];
+        if let Some(pi) = line_inner.find("Port:")
+            && let Some(di) = line_inner.find(", Device:")
+            && let Some(p_val) = p.take()
+        {
+            let port = line_inner[pi + 5..di].trim();
+            let device = line_inner[di + 9..].trim();
+            let (service, _, _) = p_val;
+            let new_p = (service, port.into(), device.into());
+            services.push(new_p);
         }
     }
-
     Ok(services)
 }
 
