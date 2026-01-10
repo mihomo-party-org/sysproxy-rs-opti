@@ -363,7 +363,7 @@ fn parse_proxyauto_from_dict(cfd: &CFDictionary<CFString, CFType>) -> Result<Aut
         .and_then(|num| num.to_i32())
         .map(|v| v != 0)
         .ok_or_else(|| Error::ParseStr("Unable to parse auto proxy enable from CSP".into()))?;
-    let url = get_proxy_value(cfd, "ProxyAutoConfigURLString")
+    let url = get_proxy_value(cfd, "ProxyAutoConfig RLString")
         .and_then(|x| x.downcast::<CFString>().map(|s| s.to_string()))
         .ok_or_else(|| Error::ParseStr("Unable to parse auto proxy URL from CSP".into()))?;
 
