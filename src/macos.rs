@@ -344,23 +344,15 @@ fn parse_proxies_from_dict(
         .map(|v| v != 0)
         .unwrap_or(false);
 
-    // If not enabled, return default disabled proxy
-    if !enable {
-        return Ok(Sysproxy {
-            enable: false,
-            host: String::new(),
-            port: 0,
-            bypass: String::new(),
-        });
-    }
-
+    // Read host/port even when disabled (macOS preserves these values)
     let port = get_proxy_value(cfd, proxy_type.as_port())
         .and_then(|x| x.downcast::<CFNumber>())
         .and_then(|num| num.to_i32())
-        .ok_or_else(|| Error::ParseStr("Unable to parse port from CSP".into()))?;
+        .unwrap_or(0);
     let host = get_proxy_value(cfd, proxy_type.as_host())
         .and_then(|x| x.downcast::<CFString>().map(|s| s.to_string()))
-        .ok_or_else(|| Error::ParseStr("Unable to parse host from CSP".into()))?;
+        .unwrap_or_default();
+
     Ok(Sysproxy {
         enable,
         host,
