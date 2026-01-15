@@ -84,3 +84,23 @@ pub fn set_auto_proxy(proxy: JsAutoproxy) -> Result<()> {
     p.set_auto_proxy()
         .map_err(|e| Error::from_reason(e.to_string()))
 }
+
+// Compatibility API for clash-party
+#[napi]
+pub fn trigger_manual_proxy(enable: bool, host: String, port: u32, bypass: String) -> Result<()> {
+    let p = Sysproxy {
+        enable,
+        host,
+        port: port as u16,
+        bypass,
+    };
+    p.set_system_proxy()
+        .map_err(|e| Error::from_reason(e.to_string()))
+}
+
+#[napi]
+pub fn trigger_auto_proxy(enable: bool, url: String) -> Result<()> {
+    let p = Autoproxy { enable, url };
+    p.set_auto_proxy()
+        .map_err(|e| Error::from_reason(e.to_string()))
+}
