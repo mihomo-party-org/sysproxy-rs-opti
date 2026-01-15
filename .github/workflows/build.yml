@@ -99,31 +99,35 @@ jobs:
             artifact: sysproxy.linux-arm64-musl.node
 
     runs-on: ubuntu-latest
-    container:
-      image: node:22-alpine
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Build Tools
-        run: apk add --no-cache musl-dev gcc g++ make python3 curl bash
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'pnpm'
 
       - name: Install Rust
-        run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-          source $HOME/.cargo/env
-          rustup target add ${{ matrix.target }}
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
 
-      - name: Install pnpm
-        run: npm install -g pnpm@10
+      - name: Install Zig
+        uses: goto-bus-stop/setup-zig@v2
+
+      - name: Install cargo-zigbuild
+        run: cargo install cargo-zigbuild
 
       - name: Install Dependencies
         run: pnpm install
 
       - name: Build
-        run: |
-          source $HOME/.cargo/env
-          pnpm build --target ${{ matrix.target }}
+        run: pnpm build --target ${{ matrix.target }} --use-zig
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
