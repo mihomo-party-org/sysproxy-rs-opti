@@ -5,9 +5,12 @@ edition = "2024"
 authors = ["zzzgydi"]
 license = "MIT"
 readme = "README.md"
-repository = "https://github.com/zzzgydi/sysproxy-rs.git"
+repository = "https://github.com/mihomo-party-org/sysproxy-rs-opti.git"
 keywords = ["system-proxy", "proxy", "networksetup", "gsettings"]
 description = "A library for set/get system proxy. Supports Windows, macOS and linux (via gsettings)."
+
+[lib]
+crate-type = ["cdylib", "lib"]
 
 [dependencies]
 log = "0.4"
@@ -19,6 +22,8 @@ tokio = { version = "1", features = [
     "macros",
     "time",
 ], optional = true }
+napi = { version = "3", default-features = false, features = ["napi4"] }
+napi-derive = "3"
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 url = "2.5"
