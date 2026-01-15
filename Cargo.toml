@@ -47,6 +47,9 @@ windows = { version = "0.62", features = [
 serial_test = "3.1"
 criterion = "0.7"
 
+[build-dependencies]
+napi-build = { version = "2", optional = true }
+
 [[bench]]
 name = "macos_behavior"
 harness = false
@@ -54,7 +57,7 @@ harness = false
 [features]
 default = ["iptools", "napi-binding"]
 guard = ["tokio"]
-napi-binding = ["napi", "napi-derive"]
+napi-binding = ["napi", "napi-derive", "napi-build"]
 
 [lints.clippy]
 # Core categories - most important for code safety and correctness
