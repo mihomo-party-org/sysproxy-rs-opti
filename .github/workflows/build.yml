@@ -127,7 +127,7 @@ jobs:
         run: pnpm install
 
       - name: Build
-        run: pnpm build --target ${{ matrix.target }} --use-zig
+        run: pnpm build --target ${{ matrix.target }} -x
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
