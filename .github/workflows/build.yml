@@ -100,21 +100,30 @@ jobs:
 
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/napi-rs/napi-rs/nodejs-rust:lts-alpine
+      image: node:22-alpine
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Rust
+      - name: Install Build Tools
+        run: apk add --no-cache musl-dev gcc g++ make python3 curl bash
+
+      - name: Install Rust
         run: |
-          rustup default stable
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          source $HOME/.cargo/env
           rustup target add ${{ matrix.target }}
+
+      - name: Install pnpm
+        run: npm install -g pnpm@10
 
       - name: Install Dependencies
         run: pnpm install
 
       - name: Build
-        run: pnpm build --target ${{ matrix.target }}
+        run: |
+          source $HOME/.cargo/env
+          pnpm build --target ${{ matrix.target }}
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
