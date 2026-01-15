@@ -15,6 +15,8 @@ pub mod guard;
 #[cfg(feature = "guard")]
 pub use guard::{GuardMonitor, GuardType};
 
+// napi bindings only compiled when building cdylib (not during cargo test)
+#[cfg(not(test))]
 mod napi;
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
