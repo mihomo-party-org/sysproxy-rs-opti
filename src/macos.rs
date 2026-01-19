@@ -305,12 +305,14 @@ fn get_active_network_service() -> Result<CFString> {
     let scp = SCPreferences::default(&CFString::new("sysproxy-rs"));
     let services = SCNetworkService::get_services(&scp);
     for service in &services {
-        if let Some(uuid) = service.id()
-            && uuid == service_uuid
-            && let Some(interface) = service.network_interface()
-            && let Some(name) = interface.display_name()
-        {
-            return Ok(name);
+        if let Some(uuid) = service.id() {
+            if uuid == service_uuid {
+                if let Some(interface) = service.network_interface() {
+                    if let Some(name) = interface.display_name() {
+                        return Ok(name);
+                    }
+                }
+            }
         }
     }
     Err(Error::NetworkInterface)
@@ -432,9 +434,10 @@ fn get_service_id_by_display_name(scp: &SCPreferences, name: &CFString) -> Optio
         if let Some(interface) = service
             .network_interface()
             .and_then(|scn_inter| scn_inter.display_name())
-            && interface == *name
         {
-            return service.id();
+            if interface == *name {
+                return service.id();
+            }
         }
     }
     None
