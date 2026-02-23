@@ -24,7 +24,7 @@ jobs:
             target: x86_64-pc-windows-msvc
             artifact: sysproxy.win32-x64-msvc-win7.node
             features: ""
-            toolchain: 1.70.0
+            toolchain: stable
           - os: windows-latest
             target: aarch64-pc-windows-msvc
             artifact: sysproxy.win32-arm64-msvc.node
@@ -39,7 +39,7 @@ jobs:
             target: i686-pc-windows-msvc
             artifact: sysproxy.win32-ia32-msvc-win7.node
             features: ""
-            toolchain: 1.70.0
+            toolchain: stable
           # macOS
           - os: macos-latest
             target: x86_64-apple-darwin
@@ -52,12 +52,12 @@ jobs:
             features: ""
             toolchain: stable
           # Linux GNU (use ubuntu-20.04 for GLIBC 2.31 compatibility)
-          - os: ubuntu-20.04
+          - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             artifact: sysproxy.linux-x64-gnu.node
             features: ""
             toolchain: stable
-          - os: ubuntu-20.04
+          - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             artifact: sysproxy.linux-arm64-gnu.node
             features: ""
