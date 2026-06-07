@@ -58,6 +58,10 @@ pub enum Error {
     #[error("failed to interact with SCDynamicStore")]
     SCDynamicStore,
 
+    #[cfg(target_os = "macos")]
+    #[error("networksetup failed: {0}")]
+    NetworkSetup(String),
+
     #[cfg(target_os = "linux")]
     #[error(transparent)]
     Xdg(#[from] xdg::BaseDirectoriesError),

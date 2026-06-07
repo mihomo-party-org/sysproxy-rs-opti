@@ -2,7 +2,7 @@ use crate::{Autoproxy, Error, Result, Sysproxy};
 use log::debug;
 use std::{
     borrow::Cow,
-    process::{Command, Stdio},
+    process::{Command, Output, Stdio},
     str::from_utf8,
 };
 use system_configuration::{
@@ -14,13 +14,15 @@ use system_configuration::{
     network_configuration::SCNetworkService,
     sys::network_configuration::{
         SCNetworkProtocolGetConfiguration, SCNetworkServiceCopy, SCNetworkServiceCopyProtocol,
+        SCNetworkServiceGetName,
     },
+    sys::preferences::{SCPreferencesLock, SCPreferencesUnlock},
 };
 use system_configuration::{
     core_foundation::{
         base::{CFRelease, CFType, ItemRef},
         number::CFNumber,
-        string::CFString,
+        string::{CFString, CFStringRef},
     },
     dynamic_store::SCDynamicStoreBuilder,
 };
@@ -81,22 +83,20 @@ impl ProxyType {
 impl Sysproxy {
     #[inline]
     pub fn get_system_proxy() -> Result<Sysproxy> {
-        let service = get_active_network_service()?;
+        let service_uuid = get_active_network_service_uuid()?;
         let scp = SCPreferences::default(&CFString::new("sysproxy-rs"));
-        let service_id =
-            get_service_id_by_display_name(&scp, &service).ok_or(Error::NetworkInterface)?;
-        let proxies_dict = get_proxies_by_service_uuid(&scp, &service_id)?;
+        let proxies_dict = get_proxies_by_service_uuid(&scp, &service_uuid)?;
 
-        let mut socks = Sysproxy::get_socks(&service, Some(&proxies_dict))?;
+        let mut socks = parse_proxies_from_dict(&proxies_dict, ProxyType::Socks)?;
         debug!("Getting SOCKS proxy: {:?}", socks);
 
-        let http = Sysproxy::get_http(&service, Some(&proxies_dict))?;
+        let http = parse_proxies_from_dict(&proxies_dict, ProxyType::Http)?;
         debug!("Getting HTTP proxy: {:?}", http);
 
-        let https = Sysproxy::get_https(&service, Some(&proxies_dict))?;
+        let https = parse_proxies_from_dict(&proxies_dict, ProxyType::Https)?;
         debug!("Getting HTTPS proxy: {:?}", https);
 
-        let bypass = Sysproxy::get_bypass(&service, Some(&proxies_dict))?;
+        let bypass = parse_bypass_from_dict(&proxies_dict)?.join(",");
         debug!("Getting bypass domains: {:?}", bypass);
 
         socks.bypass = bypass;
@@ -129,10 +129,10 @@ impl Sysproxy {
         debug!("Setting SOCKS proxy");
         self.set_socks(service)?;
 
-        debug!("Setting HTTP proxy");
+        debug!("Setting HTTPS proxy");
         self.set_https(service)?;
 
-        debug!("Setting HTTPS proxy");
+        debug!("Setting HTTP proxy");
         self.set_http(service)?;
 
         debug!("Setting bypass domains");
@@ -211,16 +211,14 @@ impl Sysproxy {
 
     #[inline]
     pub fn has_permission() -> bool {
-        let check = || -> Result<()> {
-            let service = get_active_network_service()?.to_string();
-            run_networksetup(&["-setwebproxystate", &service, "off"])?;
-            Ok(())
-        };
-
-        match check() {
-            Ok(_) => true,
-            Err(e) => {
-                debug!("Permission check failed: {:?}", e);
+        let scp = SCPreferences::default(&CFString::new("sysproxy-rs"));
+        unsafe {
+            let locked = SCPreferencesLock(scp.as_concrete_TypeRef(), 0);
+            if locked != 0 {
+                SCPreferencesUnlock(scp.as_concrete_TypeRef());
+                true
+            } else {
+                debug!("Permission check failed: SCPreferencesLock returned false");
                 false
             }
         }
@@ -256,23 +254,46 @@ impl Autoproxy {
 
 #[inline]
 fn run_networksetup<'a>(args: &[&str]) -> Result<Cow<'a, str>> {
-    let mut command = Command::new("networksetup");
-    let outoput = command
+    let output = Command::new("networksetup")
         .args(args)
         .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    let output = outoput.output()?;
-    let status = outoput.status()?;
+        .stderr(Stdio::piped())
+        .output()?;
 
+    parse_networksetup_output(args, output)
+}
+
+#[inline]
+fn parse_networksetup_output<'a>(args: &[&str], output: Output) -> Result<Cow<'a, str>> {
     let stdout = from_utf8(&output.stdout).map_err(|_| Error::ParseStr("output".into()))?;
+    let stderr = from_utf8(&output.stderr).map_err(|_| Error::ParseStr("error output".into()))?;
 
-    if !status.success() && stdout.contains("requires admin privileges") {
+    if !output.status.success() {
+        let details = [stdout.trim(), stderr.trim()]
+            .into_iter()
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        if details.contains("requires admin privileges") {
+            log::error!(
+                "Admin privileges required to run networksetup with args: {:?}, error: {}",
+                args,
+                details
+            );
+            return Err(Error::RequiresAdminPrivileges);
+        }
+
         log::error!(
-            "Admin privileges required to run networksetup with args: {:?}, error: {}",
+            "networksetup failed with args: {:?}, status: {}, error: {}",
             args,
-            stdout
+            output.status,
+            details
         );
-        return Err(Error::RequiresAdminPrivileges);
+        return Err(Error::NetworkSetup(format!(
+            "args={args:?}, status={}, error={details}",
+            output.status
+        )));
     }
 
     Ok(Cow::Owned(stdout.to_string()))
@@ -295,27 +316,41 @@ fn set_proxy(proxy: &Sysproxy, proxy_type: ProxyType, service: &str) -> Result<(
 
 #[inline]
 fn set_bypass(proxy: &Sysproxy, service: &str) -> Result<()> {
-    let domains = proxy.bypass.split(",").collect::<Vec<_>>();
-    run_networksetup(&[["-setproxybypassdomains", service].to_vec(), domains].concat())?;
+    let mut args = vec!["-setproxybypassdomains", service];
+    let domains: Vec<&str> = if proxy.bypass.is_empty() {
+        Vec::new()
+    } else {
+        proxy.bypass.split(",").collect()
+    };
+    args.extend(&domains);
+    run_networksetup(&args)?;
     Ok(())
 }
 
 fn get_active_network_service() -> Result<CFString> {
     let service_uuid = get_active_network_service_uuid()?;
     let scp = SCPreferences::default(&CFString::new("sysproxy-rs"));
-    let services = SCNetworkService::get_services(&scp);
-    for service in &services {
-        if let Some(uuid) = service.id() {
-            if uuid == service_uuid {
-                if let Some(interface) = service.network_interface() {
-                    if let Some(name) = interface.display_name() {
-                        return Ok(name);
-                    }
-                }
-            }
+    unsafe {
+        let service_ref = SCNetworkServiceCopy(
+            scp.as_concrete_TypeRef(),
+            service_uuid.as_concrete_TypeRef(),
+        );
+        if service_ref.is_null() {
+            return Err(Error::NetworkInterface);
         }
+
+        let name = network_service_name_from_ptr(SCNetworkServiceGetName(service_ref));
+        CFRelease(service_ref);
+        name.ok_or(Error::NetworkInterface)
     }
-    Err(Error::NetworkInterface)
+}
+
+unsafe fn network_service_name_from_ptr(name: CFStringRef) -> Option<CFString> {
+    if name.is_null() {
+        None
+    } else {
+        Some(unsafe { CFString::wrap_under_get_rule(name) })
+    }
 }
 
 fn get_active_network_service_uuid() -> Result<CFString> {
@@ -339,26 +374,15 @@ fn parse_proxies_from_dict(
     cfd: &CFDictionary<CFString, CFType>,
     proxy_type: ProxyType,
 ) -> Result<Sysproxy> {
-    // When proxy is not configured, these keys may not exist - default to disabled
-    let enable = get_proxy_value(cfd, proxy_type.as_enable())
-        .and_then(|x| x.downcast::<CFNumber>())
-        .and_then(|num| num.to_i32())
-        .map(|v| v != 0)
-        .unwrap_or(false);
-
-    // Read host/port even when disabled (macOS preserves these values)
-    let port = get_proxy_value(cfd, proxy_type.as_port())
-        .and_then(|x| x.downcast::<CFNumber>())
-        .and_then(|num| num.to_i32())
-        .unwrap_or(0);
-    let host = get_proxy_value(cfd, proxy_type.as_host())
-        .and_then(|x| x.downcast::<CFString>().map(|s| s.to_string()))
-        .unwrap_or_default();
+    let enable = read_bool_flag(cfd, proxy_type.as_enable());
+    let port = read_port(cfd, proxy_type.as_port());
+    let host = read_host(cfd, proxy_type.as_host());
+    let enable = enable && !host.is_empty() && port != 0;
 
     Ok(Sysproxy {
         enable,
         host,
-        port: port as u16,
+        port,
         bypass: String::new(),
     })
 }
@@ -370,28 +394,22 @@ fn parse_proxyauto_from_dict(cfd: &CFDictionary<CFString, CFType>) -> Result<Aut
         .and_then(|num| num.to_i32())
         .map(|v| v != 0)
         .unwrap_or(false);
-
-    // If not enabled, return default disabled auto proxy
-    if !enable {
-        return Ok(Autoproxy {
-            enable: false,
-            url: String::new(),
-        });
-    }
-
     let url = get_proxy_value(cfd, "ProxyAutoConfigURLString")
         .and_then(|x| x.downcast::<CFString>().map(|s| s.to_string()))
-        .ok_or_else(|| Error::ParseStr("Unable to parse auto proxy URL from CSP".into()))?;
+        .unwrap_or_default();
 
     let url = if url == "\"\"" { String::new() } else { url };
+    let enable = enable && !url.is_empty();
 
     Ok(Autoproxy { enable, url })
 }
 
 fn parse_bypass_from_dict(cfd: &CFDictionary<CFString, CFType>) -> Result<Vec<String>> {
-    let bypass_list_raw = get_proxy_value(cfd, "ExceptionsList")
-        .and_then(|x| x.downcast::<CFArray>())
-        .ok_or_else(|| Error::ParseStr("Unable to parse bypass list".into()))?;
+    let Some(bypass_list_raw) =
+        get_proxy_value(cfd, "ExceptionsList").and_then(|x| x.downcast::<CFArray>())
+    else {
+        return Ok(Vec::new());
+    };
 
     let mut bypass_list = Vec::with_capacity(bypass_list_raw.len() as usize);
     for bypass_raw in &bypass_list_raw {
@@ -410,6 +428,27 @@ fn get_proxy_value<'a>(
 ) -> Option<ItemRef<'a, CFType>> {
     let cf_key = CFString::from_static_string(key);
     dict.find(&cf_key)
+}
+
+fn read_bool_flag(cfd: &CFDictionary<CFString, CFType>, key: &'static str) -> bool {
+    get_proxy_value(cfd, key)
+        .and_then(|x| x.downcast::<CFNumber>())
+        .and_then(|num| num.to_i32())
+        .is_some_and(|v| v != 0)
+}
+
+fn read_port(cfd: &CFDictionary<CFString, CFType>, key: &'static str) -> u16 {
+    get_proxy_value(cfd, key)
+        .and_then(|x| x.downcast::<CFNumber>())
+        .and_then(|num| num.to_i32())
+        .filter(|v| (0..=u16::MAX as i32).contains(v))
+        .map_or(0, |v| v as u16)
+}
+
+fn read_host(cfd: &CFDictionary<CFString, CFType>, key: &'static str) -> String {
+    get_proxy_value(cfd, key)
+        .and_then(|x| x.downcast::<CFString>().map(|s| s.to_string()))
+        .unwrap_or_default()
 }
 
 // #[allow(dead_code)]
@@ -481,11 +520,14 @@ fn get_proxies_by_service_uuid(
             CFString::from_static_string("Proxies").as_concrete_TypeRef(),
         );
         if protocol_ref.is_null() {
+            CFRelease(service_ref);
             return Err(Error::SCPreferences);
         }
 
         let config = SCNetworkProtocolGetConfiguration(protocol_ref);
         if config.is_null() {
+            CFRelease(service_ref);
+            CFRelease(protocol_ref);
             return Err(Error::SCPreferences);
         }
 
@@ -549,4 +591,124 @@ fn test_set_bypass() {
         assert!(matches!(e, Error::RequiresAdminPrivileges));
         assert!(!Sysproxy::has_permission());
     }
+}
+
+#[test]
+fn parse_proxy_missing_fields_disable_proxy() {
+    let dict = CFDictionary::from_CFType_pairs(&[(
+        CFString::from_static_string("HTTPEnable"),
+        CFNumber::from(1).as_CFType(),
+    )]);
+    let proxy = parse_proxies_from_dict(&dict, ProxyType::Http).unwrap();
+    assert!(!proxy.enable);
+    assert_eq!(proxy.host, "");
+    assert_eq!(proxy.port, 0);
+}
+
+#[test]
+fn parse_proxy_negative_port_zeroed() {
+    let dict = CFDictionary::from_CFType_pairs(&[
+        (
+            CFString::from_static_string("HTTPEnable"),
+            CFNumber::from(1).as_CFType(),
+        ),
+        (
+            CFString::from_static_string("HTTPProxy"),
+            CFString::from_static_string("localhost").as_CFType(),
+        ),
+        (
+            CFString::from_static_string("HTTPPort"),
+            CFNumber::from(-1).as_CFType(),
+        ),
+    ]);
+    let proxy = parse_proxies_from_dict(&dict, ProxyType::Http).unwrap();
+    assert!(!proxy.enable);
+    assert_eq!(proxy.port, 0);
+}
+
+#[test]
+fn network_service_name_from_ptr_preserves_trailing_space() {
+    let name = CFString::new("Wi-Fi ");
+    let service_name = unsafe { network_service_name_from_ptr(name.as_concrete_TypeRef()) }
+        .map(|name| name.to_string());
+
+    assert_eq!(service_name, Some("Wi-Fi ".to_string()));
+}
+
+#[test]
+fn networksetup_nonzero_exit_returns_error() {
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::{ExitStatus, Output};
+
+    for (stdout, stderr) in [
+        (
+            b"** Error: The parameters were not valid.\n".to_vec(),
+            Vec::new(),
+        ),
+        (
+            Vec::new(),
+            b"** Error: The parameters were not valid.\n".to_vec(),
+        ),
+    ] {
+        let output = Output {
+            status: ExitStatus::from_raw(4 << 8),
+            stdout,
+            stderr,
+        };
+
+        let result = parse_networksetup_output(&["-setwebproxy", "Wi-Fi"], output);
+
+        assert!(matches!(
+            result,
+            Err(Error::NetworkSetup(message))
+                if message.contains("The parameters were not valid")
+        ));
+    }
+}
+
+#[test]
+fn parse_proxy_too_large_port_zeroed() {
+    let dict = CFDictionary::from_CFType_pairs(&[
+        (
+            CFString::from_static_string("HTTPEnable"),
+            CFNumber::from(1).as_CFType(),
+        ),
+        (
+            CFString::from_static_string("HTTPProxy"),
+            CFString::from_static_string("localhost").as_CFType(),
+        ),
+        (
+            CFString::from_static_string("HTTPPort"),
+            CFNumber::from(i32::MAX).as_CFType(),
+        ),
+    ]);
+    let proxy = parse_proxies_from_dict(&dict, ProxyType::Http).unwrap();
+    assert!(!proxy.enable);
+    assert_eq!(proxy.port, 0);
+}
+
+#[test]
+fn parse_bypass_missing_returns_empty() {
+    let dict: CFDictionary<CFString, CFType> = CFDictionary::from_CFType_pairs(&[]);
+    let bypass = parse_bypass_from_dict(&dict).unwrap();
+    assert!(bypass.is_empty());
+}
+
+#[test]
+fn parse_proxyauto_defaults_to_false_and_empty_url() {
+    let dict: CFDictionary<CFString, CFType> = CFDictionary::from_CFType_pairs(&[]);
+    let auto = parse_proxyauto_from_dict(&dict).unwrap();
+    assert!(!auto.enable);
+    assert_eq!(auto.url, "");
+}
+
+#[test]
+fn parse_proxyauto_disable_when_url_missing() {
+    let dict = CFDictionary::from_CFType_pairs(&[(
+        CFString::from_static_string("ProxyAutoConfigEnable"),
+        CFNumber::from(1).as_CFType(),
+    )]);
+    let auto = parse_proxyauto_from_dict(&dict).unwrap();
+    assert!(!auto.enable);
+    assert_eq!(auto.url, "");
 }

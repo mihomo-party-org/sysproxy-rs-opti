@@ -9,9 +9,7 @@ fn get_valid_service() -> CFString {
 }
 
 fn bench_get_system_proxy(c: &mut Criterion) {
-    c.bench_function("get_system_proxy", |b| {
-        b.iter(Sysproxy::get_system_proxy)
-    });
+    c.bench_function("get_system_proxy", |b| b.iter(Sysproxy::get_system_proxy));
 }
 
 fn bench_get_http(c: &mut Criterion) {

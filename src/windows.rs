@@ -1,5 +1,5 @@
 use crate::{Autoproxy, Result, Sysproxy};
-use std::{ffi::c_void, mem::ManuallyDrop, mem::size_of};
+use std::{ffi::c_void, mem::size_of};
 use url::Url;
 use windows::{
     Win32::{
@@ -31,7 +31,7 @@ fn encode_wide<S: AsRef<std::ffi::OsStr>>(string: S) -> Vec<u16> {
 /// **对于包含中文字符的拨号连接或 VPN 连接，可能无法正确设置其代理，建议使用全英文重命名该连接名称**
 #[inline]
 fn unset_proxy() -> Result<()> {
-    let mut p_opts = ManuallyDrop::new(Vec::<INTERNET_PER_CONN_OPTIONW>::with_capacity(1));
+    let mut p_opts = Vec::<INTERNET_PER_CONN_OPTIONW>::with_capacity(1);
     p_opts.push(INTERNET_PER_CONN_OPTIONW {
         dwOption: INTERNET_PER_CONN_FLAGS,
         Value: {
@@ -49,36 +49,31 @@ fn unset_proxy() -> Result<()> {
     };
 
     // 局域网 LAN 代理设置
-    apply(&opts)?;
+    apply_option(&opts)?;
     // 拨号连接/VPN 代理设置
     let ras_conns = get_ras_connections()?;
     for ras_conn in ras_conns.iter() {
-        opts.pszConnection = PWSTR::from_raw(encode_wide(ras_conn).as_ptr() as *mut u16);
-        apply(&opts)?;
+        let conn_wide = encode_wide(ras_conn);
+        opts.pszConnection = PWSTR::from_raw(conn_wide.as_ptr() as *mut u16);
+        apply_option(&opts)?;
         log::debug!("unset RAS[{ras_conn}] proxy success");
     }
-
-    unsafe {
-        ManuallyDrop::drop(&mut p_opts);
-    }
-
-    Ok(())
+    notify_proxy_change()
 }
 
 /// set auto proxy
 ///
 /// **对于包含中文字符的拨号连接或 VPN 连接，可能无法正确设置其代理，建议使用全英文重命名该连接名称**
 #[inline]
-fn set_auto_proxy(server: String) -> Result<()> {
-    let mut p_opts = ManuallyDrop::new(Vec::<INTERNET_PER_CONN_OPTIONW>::with_capacity(2));
+fn set_auto_proxy(url: &str) -> Result<()> {
+    let s = encode_wide(url);
+    let mut p_opts = Vec::<INTERNET_PER_CONN_OPTIONW>::with_capacity(2);
     p_opts.push(INTERNET_PER_CONN_OPTIONW {
         dwOption: INTERNET_PER_CONN_FLAGS,
         Value: INTERNET_PER_CONN_OPTIONW_0 {
             dwValue: PROXY_TYPE_AUTO_DETECT | PROXY_TYPE_AUTO_PROXY_URL | PROXY_TYPE_DIRECT,
         },
     });
-
-    let mut s = ManuallyDrop::new(encode_wide(&server));
     p_opts.push(INTERNET_PER_CONN_OPTIONW {
         dwOption: INTERNET_PER_CONN_AUTOCONFIG_URL,
         Value: INTERNET_PER_CONN_OPTIONW_0 {
@@ -95,45 +90,38 @@ fn set_auto_proxy(server: String) -> Result<()> {
     };
 
     // 局域网 LAN 代理设置
-    apply(&opts)?;
+    apply_option(&opts)?;
     // 拨号连接/VPN 代理设置
     let ras_conns = get_ras_connections()?;
     for ras_conn in ras_conns.iter() {
-        opts.pszConnection = PWSTR::from_raw(encode_wide(ras_conn).as_ptr() as *mut u16);
-        apply(&opts)?;
+        let conn_wide = encode_wide(ras_conn);
+        opts.pszConnection = PWSTR::from_raw(conn_wide.as_ptr() as *mut u16);
+        apply_option(&opts)?;
         log::debug!("set RAS[{ras_conn}] auto proxy success");
     }
-
-    unsafe {
-        ManuallyDrop::drop(&mut s);
-        ManuallyDrop::drop(&mut p_opts);
-    }
-
-    Ok(())
+    notify_proxy_change()
 }
 
 /// set global proxy
 ///
 /// **对于包含中文字符的拨号连接或 VPN 连接，可能无法正确设置其代理，建议使用全英文重命名该连接名称**
 #[inline]
-fn set_global_proxy(server: String, bypass: String) -> Result<()> {
-    let mut p_opts = ManuallyDrop::new(Vec::<INTERNET_PER_CONN_OPTIONW>::with_capacity(3));
+fn set_global_proxy(server: &str, bypass: &str) -> Result<()> {
+    let s = encode_wide(server);
+    let b = encode_wide(bypass);
+    let mut p_opts = Vec::<INTERNET_PER_CONN_OPTIONW>::with_capacity(3);
     p_opts.push(INTERNET_PER_CONN_OPTIONW {
         dwOption: INTERNET_PER_CONN_FLAGS,
         Value: INTERNET_PER_CONN_OPTIONW_0 {
             dwValue: PROXY_TYPE_PROXY | PROXY_TYPE_DIRECT,
         },
     });
-
-    let mut s = ManuallyDrop::new(encode_wide(&server));
     p_opts.push(INTERNET_PER_CONN_OPTIONW {
         dwOption: INTERNET_PER_CONN_PROXY_SERVER,
         Value: INTERNET_PER_CONN_OPTIONW_0 {
             pszValue: PWSTR::from_raw(s.as_ptr() as *mut u16),
         },
     });
-
-    let mut b = ManuallyDrop::new(encode_wide(&bypass));
     p_opts.push(INTERNET_PER_CONN_OPTIONW {
         dwOption: INTERNET_PER_CONN_PROXY_BYPASS,
         Value: INTERNET_PER_CONN_OPTIONW_0 {
@@ -149,26 +137,20 @@ fn set_global_proxy(server: String, bypass: String) -> Result<()> {
         pszConnection: PWSTR::null(),
     };
     // 局域网 LAN 代理设置
-    apply(&opts)?;
+    apply_option(&opts)?;
     // 拨号连接/VPN 代理设置
     let ras_conns = get_ras_connections()?;
     for ras_conn in ras_conns.iter() {
-        opts.pszConnection = PWSTR::from_raw(encode_wide(ras_conn).as_ptr() as *mut u16);
-        apply(&opts)?;
+        let conn_wide = encode_wide(ras_conn);
+        opts.pszConnection = PWSTR::from_raw(conn_wide.as_ptr() as *mut u16);
+        apply_option(&opts)?;
         log::debug!("set RAS[{ras_conn}] global proxy success");
     }
-
-    unsafe {
-        ManuallyDrop::drop(&mut s);
-        ManuallyDrop::drop(&mut b);
-        ManuallyDrop::drop(&mut p_opts);
-    }
-
-    Ok(())
+    notify_proxy_change()
 }
 
 #[inline]
-fn apply(options: &INTERNET_PER_CONN_OPTION_LISTW) -> Result<()> {
+fn apply_option(options: &INTERNET_PER_CONN_OPTION_LISTW) -> Result<()> {
     unsafe {
         // setting options
         let opts = options as *const INTERNET_PER_CONN_OPTION_LISTW as *const c_void;
@@ -178,7 +160,13 @@ fn apply(options: &INTERNET_PER_CONN_OPTION_LISTW) -> Result<()> {
             Some(opts),
             size_of::<INTERNET_PER_CONN_OPTION_LISTW>() as u32,
         )?;
-        // propagating changes
+    }
+    Ok(())
+}
+
+#[inline]
+fn notify_proxy_change() -> Result<()> {
+    unsafe {
         InternetSetOptionW(None, INTERNET_OPTION_PROXY_SETTINGS_CHANGED, None, 0)?;
         // refreshing
         InternetSetOptionW(None, INTERNET_OPTION_REFRESH, None, 0)?;
@@ -190,7 +178,7 @@ impl Sysproxy {
     #[inline]
     pub fn get_system_proxy() -> Result<Sysproxy> {
         let hkcu = RegKey::predef(enums::HKEY_CURRENT_USER);
-        let cur_var = hkcu.open_subkey_with_flags(SUB_KEY, enums::KEY_READ)?;
+        let cur_var = hkcu.open_subkey_with_flags(SUB_KEY, enums::KEY_QUERY_VALUE)?;
         let enable = cur_var.get_value::<u32, _>("ProxyEnable").unwrap_or(0u32) == 1u32;
         let proxy_server = cur_var
             .get_value::<String, _>("ProxyServer")
@@ -203,13 +191,14 @@ impl Sysproxy {
         if !proxy_server.is_empty() {
             if proxy_server.contains('=') {
                 // 处理多协议格式: http=127.0.0.1:7890;https=127.0.0.1:7890
-                let proxy_parts: Vec<&str> = proxy_server.split(';').collect();
-
                 // 优先查找http代理
-                let http_proxy = proxy_parts
-                    .iter()
-                    .find(|part| part.trim().to_lowercase().starts_with("http="))
-                    .or_else(|| proxy_parts.first());
+                let http_proxy = proxy_server
+                    .split(';')
+                    .find(|part| {
+                        let t = part.trim().as_bytes();
+                        t.len() >= 5 && t[..5].eq_ignore_ascii_case(b"http=")
+                    })
+                    .or_else(|| proxy_server.split(';').next());
 
                 if let Some(proxy) = http_proxy {
                     let proxy_value = proxy.split('=').nth(1).unwrap_or("");
@@ -234,7 +223,7 @@ impl Sysproxy {
     #[inline]
     pub fn set_system_proxy(&self) -> Result<()> {
         match self.enable {
-            true => set_global_proxy(format!("{}:{}", self.host, self.port), self.bypass.clone()),
+            true => set_global_proxy(&format!("{}:{}", self.host, self.port), &self.bypass),
             false => unset_proxy(),
         }
     }
@@ -244,10 +233,10 @@ impl Autoproxy {
     #[inline]
     pub fn get_auto_proxy() -> Result<Autoproxy> {
         let hkcu = RegKey::predef(enums::HKEY_CURRENT_USER);
-        let cur_var = hkcu.open_subkey_with_flags(SUB_KEY, enums::KEY_READ)?;
+        let cur_var = hkcu.open_subkey_with_flags(SUB_KEY, enums::KEY_QUERY_VALUE)?;
         let url = cur_var.get_value::<String, _>("AutoConfigURL");
         let enable = url.is_ok();
-        let url = url.unwrap_or_else(|_| "".into());
+        let url = url.unwrap_or_default();
 
         Ok(Autoproxy { enable, url })
     }
@@ -255,7 +244,7 @@ impl Autoproxy {
     #[inline]
     pub fn set_auto_proxy(&self) -> Result<()> {
         match self.enable {
-            true => set_auto_proxy(self.url.clone()),
+            true => set_auto_proxy(&self.url),
             false => unset_proxy(),
         }
     }
@@ -264,20 +253,26 @@ impl Autoproxy {
 /// 解析代理地址字符串为主机名和端口
 #[inline]
 fn parse_proxy_address(address: &str, host: &mut String, port: &mut u16) {
-    // 尝试作为URL解析
+    // 快速路径：host:port 或 [ipv6]:port，无需堆分配
+    if let Some((h, p)) = address.rsplit_once(':') {
+        if let Ok(port_num) = p.parse::<u16>() {
+            // 去除 IPv6 方括号: "[::1]" → "::1"
+            let clean = if h.starts_with('[') && h.ends_with(']') {
+                &h[1..h.len() - 1]
+            } else {
+                h
+            };
+            *host = clean.to_string();
+            *port = port_num;
+            return;
+        }
+    }
+
+    // 回退：URL 解析器处理无端口的主机名等边缘情况
     if let Ok(url) = Url::parse(&format!("http://{}", address)) {
         *host = url.host_str().unwrap_or("").to_string();
         *port = url.port().unwrap_or(80);
         return;
-    }
-
-    // 尝试作为host:port解析
-    if let Some((h, p)) = address.rsplit_once(':') {
-        if let Ok(port_num) = p.parse::<u16>() {
-            *host = h.to_string();
-            *port = port_num;
-            return;
-        }
     }
 
     // 如果无法解析端口，默认使用主机名和标准HTTP端口
@@ -296,7 +291,6 @@ fn get_ras_connections() -> Result<Vec<String>> {
         let mut buffer_size = 0u32;
         let mut entry_count = 0u32;
 
-        // 第一次调用获取所需缓冲区大小
         let result_code = RasEnumEntriesW(
             PCWSTR::null(),
             PCWSTR::null(),
@@ -357,4 +351,56 @@ fn get_ras_connections() -> Result<Vec<String>> {
     }
 
     Ok(connections)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_proxy_address;
+
+    fn parse(addr: &str) -> (String, u16) {
+        let mut host = String::new();
+        let mut port = 0u16;
+        parse_proxy_address(addr, &mut host, &mut port);
+        (host, port)
+    }
+
+    #[test]
+    fn test_ipv4_with_port() {
+        assert_eq!(parse("127.0.0.1:8080"), ("127.0.0.1".into(), 8080));
+    }
+
+    #[test]
+    fn test_hostname_with_port() {
+        assert_eq!(
+            parse("proxy.example.com:3128"),
+            ("proxy.example.com".into(), 3128)
+        );
+    }
+
+    #[test]
+    fn test_ipv6_bracketed_with_port() {
+        assert_eq!(parse("[::1]:1080"), ("::1".into(), 1080));
+    }
+
+    #[test]
+    fn test_hostname_only_defaults_port_80() {
+        assert_eq!(parse("proxy.example.com"), ("proxy.example.com".into(), 80));
+    }
+
+    #[test]
+    fn test_ipv4_only_defaults_port_80() {
+        assert_eq!(parse("192.168.1.1"), ("192.168.1.1".into(), 80));
+    }
+
+    #[test]
+    fn test_empty_string() {
+        let (host, port) = parse("");
+        assert_eq!(port, 80);
+        assert!(host.is_empty());
+    }
+
+    #[test]
+    fn test_high_port() {
+        assert_eq!(parse("10.0.0.1:65535"), ("10.0.0.1".into(), 65535));
+    }
 }
